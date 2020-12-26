@@ -1,0 +1,18 @@
+[package]
+name = "gfx"
+version = "0.1.0"
+authors = ["SamokhinIlya <samokhin.ilya.97@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[profile.dev]
+opt-level = 2
+
+[dependencies]
+rusttype = "0.9"
+static_assertions = "1.1"
+
+[dependencies.winapi]
+version = "0.3"
+features = ["winuser", "libloaderapi", "errhandlingapi"]
