@@ -168,6 +168,12 @@ fn main() {
     }
 }
 
+fn draw_point(canvas: &mut Canvas, (x, y): (isize, isize), p: Color) {
+    let x = (x + canvas.width() as isize / 2) as usize;
+    let y = (y + canvas.height() as isize / 2) as usize;
+    canvas.set((x, y), p);
+}
+
 fn draw_line(canvas: &mut Canvas, (mut x0, mut y0): (isize, isize), (mut x1, mut y1): (isize, isize)) {
     // TODO: bresenhams algorithm
     if (x1 - x0).abs() > (y1 - y0).abs() {
