@@ -18,7 +18,10 @@ use winapi::{
         winuser::DefWindowProcA,
     },
 };
-use gfx::win_except::*;
+use gfx::{
+    canvas::{Canvas, Color},
+    win_except::*,
+};
 
 fn main() {
     use std::ffi::CStr;
@@ -141,9 +144,9 @@ fn main() {
         }
         elapsed_history.push_back(elapsed);
 
-        for x in 0..canvas.width {
-            for y in 0..canvas.height {
-                canvas.set((x, y), Pixel { r: 0, g: 0, b: 0, a: 255 });
+        for x in 0..canvas.width() {
+            for y in 0..canvas.height() {
+                canvas.set((x, y), Color { r: 0, g: 0, b: 0, a: 255 });
             }
         }
 
@@ -162,6 +165,74 @@ fn main() {
             draw_str(&mut canvas, &format!("{:8.3} fps", fps), &font, scale, rusttype::point(0.0, 20.0));
         }
         stretch_di_bits_win_except(device_context, width, height, &canvas, &bitmap_info);
+    }
+}
+
+fn draw_line(canvas: &mut Canvas, (mut x0, mut y0): (isize, isize), (mut x1, mut y1): (isize, isize)) {
+    // TODO: bresenhams algorithm
+    if (x1 - x0).abs() > (y1 - y0).abs() {
+        // line more horizontal than vertical
+
+        if x0 > x1 {
+            swap(&mut x0, &mut x1);
+            swap(&mut y0, &mut y1);
+        }
+
+        for (x, y) in (x0..=x1).zip(interpolate((x0, y0), (x1, y1)).into_iter()) {
+            canvas.set((x as usize, y as usize), Color { r: 255, g: 255, b: 255, a: 255 });
+        }
+    } else {
+        // line more vertical than horizontal
+
+        if y0 > y1 {
+            swap(&mut x0, &mut x1);
+            swap(&mut y0, &mut y1);
+        }
+
+        for (y, x) in (y0..=y1).zip(interpolate((y0, x0), (y1, x1)).into_iter()) {
+            canvas.set((x as usize, y as usize), Color { r: 255, g: 255, b: 255, a: 255 });
+        }
+    }
+
+    fn interpolate((i0, d0): (isize, isize), (i1, d1): (isize, isize)) -> Vec<isize> {
+        if i0 == i1 {
+            return vec![d0];
+        }
+
+        let mut values = Vec::new();
+
+        let a = (d1 - d0) as f64 / (i1 - i0) as f64;
+        let mut d = d0 as f64;
+        for _i in i0..=i1 {
+            values.push(d as isize);
+            d += a;
+        }
+
+        values
+    }
+}
+
+fn draw_str(
+    canvas: &mut Canvas,
+    s: &str,
+    font: &rusttype::Font,
+    scale: rusttype::Scale,
+    start: rusttype::Point<f32>
+) {
+    let vmetrics = font.v_metrics(scale);
+    for g in font.layout(s, scale, start) {
+        if let Some(bbox) = g.pixel_bounding_box() {
+            g.draw(|x, y, v| {
+                let n = (255.0 * v) as u8;
+                canvas.set(
+                    (
+                        (bbox.min.x as f32 + x as f32) as usize,
+                        (vmetrics.ascent + bbox.min.y as f32 + y as f32) as usize
+                    ),
+                    Color { r: n, g: n, b: n, a: n }
+                );
+            });
+        }
     }
 }
 
@@ -209,131 +280,10 @@ fn draw_frame_time_graph(
     }
 }
 
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct Pixel {
-    b: u8,
-    g: u8,
-    r: u8,
-    a: u8,
-}
-static_assertions::assert_eq_size!(Pixel, u32);
-
-struct Canvas {
-    width: usize,
-    height: usize,
-    data: *mut Pixel,
-}
-
-impl Drop for Canvas {
-    fn drop(&mut self) {
-        use std::alloc::{Layout, dealloc};
-
-        unsafe {
-            dealloc(
-                self.data as *mut _,
-                Layout::from_size_align_unchecked(
-                    self.width * self.height * std::mem::size_of_val(&*self.data),
-                    std::mem::align_of_val(&*self.data)
-                )
-            )
-        }
-    }
-}
-
-impl Canvas {
-    fn new(width: usize, height: usize) -> Result<Self, std::alloc::LayoutErr> {
-        use std::alloc::{Layout, alloc_zeroed};
-
-        Ok(Self {
-            width,
-            height,
-            data: unsafe { alloc_zeroed(Layout::array::<Pixel>(width * height)?) } as *mut _,
-        })
-    }
-
-    fn set(&mut self, (x, y): (usize, usize), pxl: Pixel) {
-        debug_assert!(x < self.width, "Canvas::set. x: {} >= self.width: {}", x, self.width);
-        debug_assert!(y < self.height, "Canvas::set. y: {} >= self.height: {}", y, self.height);
-
-        unsafe {
-            *self.data.add(x + self.width * y) = pxl;
-        }
-    }
-}
-
-fn draw_line(canvas: &mut Canvas, (mut x0, mut y0): (isize, isize), (mut x1, mut y1): (isize, isize)) {
-    // TODO: bresenhams algorithm
-    if (x1 - x0).abs() > (y1 - y0).abs() {
-        // line more horizontal than vertical
-
-        if x0 > x1 {
-            swap(&mut x0, &mut x1);
-            swap(&mut y0, &mut y1);
-        }
-
-        for (x, y) in (x0..=x1).zip(interpolate((x0, y0), (x1, y1)).into_iter()) {
-            canvas.set((x as usize, y as usize), Pixel { r: 255, g: 255, b: 255, a: 255 });
-        }
-    } else {
-        // line more vertical than horizontal
-
-        if y0 > y1 {
-            swap(&mut x0, &mut x1);
-            swap(&mut y0, &mut y1);
-        }
-
-        for (y, x) in (y0..=y1).zip(interpolate((y0, x0), (y1, x1)).into_iter()) {
-            canvas.set((x as usize, y as usize), Pixel { r: 255, g: 255, b: 255, a: 255 });
-        }
-    }
-
-    fn interpolate((i0, d0): (isize, isize), (i1, d1): (isize, isize)) -> Vec<isize> {
-        if i0 == i1 {
-            return vec![d0];
-        }
-
-        let mut values = Vec::new();
-
-        let a = (d1 - d0) as f64 / (i1 - i0) as f64;
-        let mut d = d0 as f64;
-        for _i in i0..=i1 {
-            values.push(d as isize);
-            d += a;
-        }
-
-        values
-    }
-}
-
-fn draw_str(
-    canvas: &mut Canvas,
-    s: &str,
-    font: &rusttype::Font,
-    scale: rusttype::Scale,
-    start: rusttype::Point<f32>
-) {
-    let vmetrics = font.v_metrics(scale);
-    for g in font.layout(s, scale, start) {
-        if let Some(bbox) = g.pixel_bounding_box() {
-            g.draw(|x, y, v| {
-                let n = (255.0 * v) as u8;
-                canvas.set(
-                    (
-                        (bbox.min.x as f32 + x as f32) as usize,
-                        (vmetrics.ascent + bbox.min.y as f32 + y as f32) as usize
-                    ),
-                    Pixel { r: n, g: n, b: n, a: n }
-                );
-            });
-        }
-    }
-}
-
 /// Message dispatch loop. Dispatches all messages in queue.
 ///
 /// Returns `true`, unless WM_QUIT was received.
-pub fn dispatch_messages() -> bool {
+fn dispatch_messages() -> bool {
     use winapi::um::winuser::{
         DispatchMessageA,
         PeekMessageA,
@@ -384,9 +334,9 @@ fn stretch_di_bits_win_except(
             height,
             0,
             0,
-            canvas.width as _,
-            canvas.height as _,
-            canvas.data as *mut _,
+            canvas.width() as _,
+            canvas.height() as _,
+            canvas.data() as *mut _,
             bitmap_info,
             DIB_RGB_COLORS,
             SRCCOPY,
@@ -404,7 +354,7 @@ fn stretch_di_bits_win_except(
         ySrc: {},
         SrcWidth: {},
         SrcHeight: {},
-        lpBits: {:p},
+        lpBits: ptr,
         lpbmi: {:p},
         iUsage: {},
         rop: {},
@@ -416,9 +366,8 @@ fn stretch_di_bits_win_except(
             height,
             0,
             0,
-            canvas.width,
-            canvas.height,
-            canvas.data,
+            canvas.width(),
+            canvas.height(),
             &bitmap_info,
             DIB_RGB_COLORS,
             SRCCOPY,
@@ -426,6 +375,6 @@ fn stretch_di_bits_win_except(
     );
 }
 
-unsafe extern "system" fn window_procedure (hwnd: HWND, u_msg: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+unsafe extern "system" fn window_procedure(hwnd: HWND, u_msg: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     DefWindowProcA (hwnd, u_msg, w_param, l_param)
 }
