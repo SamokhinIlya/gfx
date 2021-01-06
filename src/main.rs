@@ -133,6 +133,8 @@ fn main() {
     let scale = rusttype::Scale::uniform(20.0);
 
     let mut elapsed_history = std::collections::VecDeque::<f64>::with_capacity(500);
+    
+    let mut z = 10.0;
 
     let mut instant = std::time::Instant::now();
     while dispatch_messages() {
@@ -164,13 +166,157 @@ fn main() {
             draw_str(&mut canvas, &format!("{:8.3} ms per frame", elapsed_ms), &font, scale, rusttype::point(0.0, 0.0));
             draw_str(&mut canvas, &format!("{:8.3} fps", fps), &font, scale, rusttype::point(0.0, 20.0));
         }
+
+        const D: Num = 1.0;
+        const VW: Num = 16.0 / 9.0;
+        const VH: Num = 9.0 / 9.0;
+
+        fn canvas_to_viewport(canvas: &Canvas, (x, y): (isize, isize)) -> V3 {
+            let x = x as Num;
+            let y = y as Num;
+            let width = canvas.width() as Num;
+            let height = canvas.height() as Num;
+            V3::from([
+                x / width * VW, 
+                y / height * VH,
+                D
+            ])
+        }
+
+        fn in_range(n: Num, range: std::ops::Range<Num>) -> bool {
+            range.contains(&n)
+        }
+
+        fn trace_ray(o: V3, d: V3, t_min: Num, t_max: Num, spheres: &[Sphere]) -> Color {
+            fn get_t_or(default: Num, intersection: &Option<(Color, Num)>) -> Num {
+                intersection.map_or(default, |(_, t)| t)
+            }
+
+            let mut closest_intesection: Option<(Color, Num)> = None;
+            for sphere in spheres {
+                for &t in &intersect_ray_sphere(o, d, sphere) {
+                    if in_range(t, t_min..t_max) && t < get_t_or(Num::INFINITY, &closest_intesection) {
+                        closest_intesection = Some((sphere.color, t));
+                    }
+                }
+            }
+
+            if let Some((color, _)) = closest_intesection {
+                color
+            } else {
+                Color { r: 0, g: 0, b: 0, a: 255 }
+            }
+        }
+
+        fn intersect_ray_sphere(o: V3, d: V3, sphere: &Sphere) -> [Num; 2] {
+            // result is all possible t for a ray intersecting a sphere
+            // ray: p^ = o^ + t * d^
+            // sphere: |p^ - c^| = r
+            //           => dot(p^ - c^, p^ - c^) = r * r
+            //
+            // substitute p^ in sphere equation with it's value in p^ equation
+            // dot(o^ + t * d^ - c^, o^ + t * d^ - c^) = r * r
+            //
+            // let oc^ = o^ - c^
+            // in dot(oc^ + t * d^, oc^ + t * d^) = r * r
+            // => dot(oc^, oc^) + 2 * dot(oc^, t * d^) + dot(t * d^, t * d^) = r * r
+            // => t * t * dot(d^, d^) + t * 2 * dot(oc^, d^) + dot(oc^, oc^) - r * r = 0 
+            // This is quadratic equation
+
+            let c = sphere.center;
+            let r = sphere.radius;
+            let oc = o - c;
+
+            let a = dot(d, d);
+            let b = 2.0 * dot(oc, d);
+            let c = dot(oc, oc) - r * r;
+
+            let discriminant = b * b - 4.0 * a * c;
+            if discriminant < 0.0 {
+                [Num::INFINITY; 2]
+            } else {
+                let t1 = (-b + discriminant.sqrt()) / (2.0 * a);
+                let t2 = (-b - discriminant.sqrt()) / (2.0 * a);
+                [t1, t2]
+            }
+        }
+
+        let spheres = [
+            Sphere { center: [0.0, 0.0, 2.0].into(), radius: 0.5, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+            Sphere { center: [0.0, 1.0, z].into(), radius: 2.0, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        ];
+        z -= 0.01;
+
+        let o: V3 = [0.0; 3].into();
+        for x in (-(canvas.width() as isize)/2)..(canvas.width() as isize/2) {
+            for y in (-(canvas.height() as isize)/2)..(canvas.height() as isize/2) {
+                let d = canvas_to_viewport(&canvas, (x, y));
+                let col = trace_ray(o, d, 1.0, Num::INFINITY, &spheres);
+                draw_point(&mut canvas, (x, y), col);
+            }
+        }
+
         stretch_di_bits_win_except(device_context, width, height, &canvas, &bitmap_info);
     }
 }
 
+#[derive(Clone, Copy)]
+struct V3 {
+    x: Num,
+    y: Num,
+    z: Num,
+}
+
+impl From<[Num; 3]> for V3 {
+    fn from([x, y, z]: [Num; 3]) -> Self {
+        V3 { x, y, z }
+    }
+}
+
+impl std::ops::Mul<V3> for Num {
+    type Output = V3;
+    fn mul(self, rhs: V3) -> Self::Output {
+        [self * rhs.x, self * rhs.y, self * rhs.z].into()
+    }
+}
+
+impl std::ops::Add for V3 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        [self.x + rhs.x, self.y + rhs.y, self.z + rhs.z].into()
+    }
+}
+
+impl std::ops::Sub for V3 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        self + (-rhs)
+    }
+}
+
+impl std::ops::Neg for V3 {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        [-self.x, -self.y, -self.z].into()
+    }
+}
+
+fn dot(lhs: V3, rhs: V3) -> Num {
+    lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z
+}
+
+type Num = f64;
+
+struct Sphere {
+    center: V3,
+    radius: Num,
+    color: Color,
+}
+
 fn draw_point(canvas: &mut Canvas, (x, y): (isize, isize), p: Color) {
+    // rev_y * p + dim
     let x = (x + canvas.width() as isize / 2) as usize;
-    let y = (y + canvas.height() as isize / 2) as usize;
+    let y = (-(y + 1) + canvas.height() as isize / 2) as usize;
     canvas.set((x, y), p);
 }
 
