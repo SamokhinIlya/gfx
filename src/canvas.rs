@@ -1,3 +1,5 @@
+use crate::math::Num;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -7,6 +9,34 @@ pub struct Color {
     pub a: u8,
 }
 static_assertions::assert_eq_size!(Color, u32);
+
+pub fn set_intensity(c: Color, i: Num) -> Color {
+    fn clamp(x: Num, range: std::ops::RangeInclusive<Num>) -> Num {
+        let start = *range.start();
+        let end = *range.end();
+        if x < start {
+            start
+        } else if x > end {
+            end
+        } else {
+            x
+        }
+    }
+
+    // i is guaranteed to be in range 0.0..=1.0
+    fn set_channel_intensity(c: u8, i: Num) -> u8 {
+        (c as Num * i) as u8
+    }
+
+    let i = clamp(i, 0.0..=1.0);
+
+    Color {
+        b: set_channel_intensity(c.b, i),
+        g: set_channel_intensity(c.g, i),
+        r: set_channel_intensity(c.r, i),
+        ..c
+    }
+}
 
 pub struct Canvas {
     width: usize,

@@ -20,6 +20,7 @@ use winapi::{
 };
 use gfx::{
     canvas::{Canvas, Color},
+    math::Num,
     win_except::*,
 };
 
@@ -134,8 +135,6 @@ fn main() {
 
     let mut elapsed_history = std::collections::VecDeque::<f64>::with_capacity(500);
     
-    let mut z = 10.0;
-
     let mut instant = std::time::Instant::now();
     while dispatch_messages() {
         let elapsed = instant.elapsed().as_secs_f64();
@@ -187,22 +186,25 @@ fn main() {
             range.contains(&n)
         }
 
-        fn trace_ray(o: V3, d: V3, t_min: Num, t_max: Num, spheres: &[Sphere]) -> Color {
-            fn get_t_or(default: Num, intersection: &Option<(Color, Num)>) -> Num {
+        fn trace_ray(o: V3, d: V3, t_min: Num, t_max: Num, scene: &Scene) -> Color {
+            fn get_t_or(default: Num, intersection: &Option<(&Sphere, Num)>) -> Num {
                 intersection.map_or(default, |(_, t)| t)
             }
 
-            let mut closest_intesection: Option<(Color, Num)> = None;
-            for sphere in spheres {
+            let mut closest_intesection: Option<(&Sphere, Num)> = None;
+            for sphere in scene.spheres {
                 for &t in &intersect_ray_sphere(o, d, sphere) {
                     if in_range(t, t_min..t_max) && t < get_t_or(Num::INFINITY, &closest_intesection) {
-                        closest_intesection = Some((sphere.color, t));
+                        closest_intesection = Some((sphere, t));
                     }
                 }
             }
 
-            if let Some((color, _)) = closest_intesection {
-                color
+            if let Some((sphere, t)) = closest_intesection {
+                let p = o + t * d;
+                let n = p - sphere.center;
+                let n = n / len(n);
+                gfx::canvas::set_intensity(sphere.color, get_light_intensity(p, n, scene))
             } else {
                 Color { r: 0, g: 0, b: 0, a: 255 }
             }
@@ -241,17 +243,64 @@ fn main() {
             }
         }
 
-        let spheres = [
-            Sphere { center: [0.0, 0.0, 2.0].into(), radius: 0.5, color: Color { r: 255, g: 255, b: 255, a: 255 } },
-            Sphere { center: [0.0, 1.0, z].into(), radius: 2.0, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        fn get_light_intensity(p: V3, n: V3, scene: &Scene) -> Num {
+            let mut i = 0.0;
+            for light in scene.lights {
+                match light.light_type {
+                    LightType::Ambient => {
+                        i += light.intensity;
+                    },
+                    LightType::Point { pos: dir }
+                        | LightType::Directional { dir } =>
+                    {
+                        let l = if let LightType::Point { .. } = light.light_type {
+                            dir - p
+                        } else {
+                            dir
+                        };
+
+                        let n_dot_l = dot(n, l);
+                        if n_dot_l > 0.0 {
+                            i += light.intensity * n_dot_l / (len(n) * len(l))
+                        }
+                    },
+                }
+            }
+            i
+        }
+
+        struct Scene<'a> {
+            lights: &'a [Light],
+            spheres: &'a [Sphere],
+        }
+
+        let lights = &[
+            Light {
+                intensity: 0.2,
+                light_type: LightType::Ambient,
+            },
+            Light {
+                intensity: 0.6,
+                light_type: LightType::Point { pos: [4, 1, 0].into() },
+            },
+            Light {
+                intensity: 0.2,
+                light_type: LightType::Directional { dir: [1, 4, 4].into() },
+            },
         ];
-        z -= 0.01;
+
+        let spheres = &[
+            Sphere { center: [0.0, 0.0, 2.0].into(), radius: 0.5, color: Color { r: 255, g: 255, b: 255, a: 255 } },
+            Sphere { center: [3, 1, 10].into(), radius: 2.0, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        ];
+
+        let scene = Scene { lights, spheres };
 
         let o: V3 = [0.0; 3].into();
         for x in (-(canvas.width() as isize)/2)..(canvas.width() as isize/2) {
             for y in (-(canvas.height() as isize)/2)..(canvas.height() as isize/2) {
                 let d = canvas_to_viewport(&canvas, (x, y));
-                let col = trace_ray(o, d, 1.0, Num::INFINITY, &spheres);
+                let col = trace_ray(o, d, 1.0, Num::INFINITY, &scene);
                 draw_point(&mut canvas, (x, y), col);
             }
         }
@@ -273,10 +322,23 @@ impl From<[Num; 3]> for V3 {
     }
 }
 
+impl From<[isize; 3]> for V3 {
+    fn from([x, y, z]: [isize; 3]) -> Self {
+        V3 { x: x as Num, y: y as Num, z: z as Num }
+    }
+}
+
 impl std::ops::Mul<V3> for Num {
     type Output = V3;
     fn mul(self, rhs: V3) -> Self::Output {
         [self * rhs.x, self * rhs.y, self * rhs.z].into()
+    }
+}
+
+impl std::ops::Div<Num> for V3 {
+    type Output = V3;
+    fn div(self, rhs: Num) -> Self::Output {
+        [self.x / rhs, self.y / rhs, self.z / rhs].into()
     }
 }
 
@@ -305,12 +367,25 @@ fn dot(lhs: V3, rhs: V3) -> Num {
     lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z
 }
 
-type Num = f64;
+fn len(v: V3) -> Num {
+    dot(v, v).sqrt()
+}
 
 struct Sphere {
     center: V3,
     radius: Num,
     color: Color,
+}
+
+struct Light {
+    intensity: Num,
+    light_type: LightType
+}
+
+enum LightType {
+    Ambient,
+    Point { pos: V3 },
+    Directional { dir: V3 },
 }
 
 fn draw_point(canvas: &mut Canvas, (x, y): (isize, isize), p: Color) {
@@ -528,5 +603,5 @@ fn stretch_di_bits_win_except(
 }
 
 unsafe extern "system" fn window_procedure(hwnd: HWND, u_msg: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-    DefWindowProcA (hwnd, u_msg, w_param, l_param)
+    DefWindowProcA(hwnd, u_msg, w_param, l_param)
 }
